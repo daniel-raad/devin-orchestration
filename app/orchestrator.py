@@ -26,7 +26,7 @@ from app.models import (
     RemediationTask,
     TaskStatus,
 )
-from app.modes import Mode, detect_mode, get_mode, mode_for_status
+from app.modes import PLAN, Mode, detect_mode, get_mode, mode_for_status
 from app.prompts import build_plan_to_remediate_prompt, build_replan_from_pr_prompt
 
 log = logging.getLogger(__name__)
@@ -100,22 +100,6 @@ def _pr_number_from_url(url: str | None) -> int | None:
         return None
     m = _PR_NUMBER_RE.search(url)
     return int(m.group(1)) if m else None
-
-
-def _session_started_body(task: RemediationTask, mode: Mode) -> str:
-    if mode.key == "plan":
-        return (
-            f"Devin is drafting a plan for this issue: {task.devin_session_url}.\n\n"
-            "I'll post the plan back here once Devin is done. "
-            "Add another `@devin` comment to refine the planning request "
-            "while it's in progress."
-        )
-    return (
-        f"Devin remediation session started: {task.devin_session_url}.\n\n"
-        "I'll use this issue thread as the collaboration surface. "
-        "Add another `@devin` comment if you want to refine the task, "
-        "answer questions, or request changes."
-    )
 
 
 def _safe_post(gh, *, repo_full_name: str, issue_number: int, body: str) -> Optional[dict]:
@@ -283,7 +267,7 @@ def handle_comment_event(
 
     action = _route(
         task=task,
-        is_plan=incoming_mode.key == "plan",
+        is_plan=incoming_mode is PLAN,
         is_continuation=wants_continuation,
     )
 
@@ -451,9 +435,7 @@ def _create_new_session(
     # Skip the brief "session_started" interlude — the task starts directly
     # in the phase its mode implies. The poller will move it forward from
     # there as Devin makes progress.
-    task.status = (
-        TaskStatus.PLANNING.value if mode.key == "plan" else TaskStatus.REMEDIATING.value
-    )
+    task.status = mode.initial_status
     task.last_devin_update_at = _utcnow()
     task.updated_at = _utcnow()
     db.flush()
@@ -468,7 +450,7 @@ def _create_new_session(
         gh=gh,
         task=task,
         status_kind="session_started",
-        body=_session_started_body(task, mode),
+        body=mode.session_started_body(task),
     )
     db.commit()
     return {
@@ -914,23 +896,11 @@ def _refuse_mode_switch(
     politely and tell the user how to resolve it, rather than silently
     handing two intents to the same Devin session.
     """
-    suffix_hint = ""
-    if existing_mode.key == "remediate" and incoming_mode.key == "plan":
-        suffix_hint = (
-            "\n\nIf you'd rather have a plan, wait for this remediation to "
-            "complete (or fail), then comment `@devin plan ...` again."
-        )
-    elif existing_mode.key == "plan" and incoming_mode.key == "remediate":
-        suffix_hint = (
-            "\n\nIf you want me to start implementing right now, wait until "
-            "the plan is posted and then comment `@devin go ahead`."
-        )
-
     parts = [
         f"There's already an active **{existing_mode.label}** task on this "
         f"issue (Devin session: {task.devin_session_url or 'pending'}).",
         f"You asked for **{incoming_mode.label}** instead — I'm not going to "
-        "switch modes mid-flight." + suffix_hint,
+        "switch modes mid-flight." + existing_mode.switch_refusal_hint,
     ]
     body = "\n\n".join(parts)
     posted = _safe_post(
@@ -1126,7 +1096,7 @@ def refresh_task_from_devin(
             gh=gh,
             task=task,
             status_kind="session_started",
-            body=_session_started_body(task, mode_for_status(task.status)),
+            body=mode_for_status(task.status).session_started_body(task),
         )
 
     try:
@@ -1258,11 +1228,12 @@ def refresh_task_from_devin(
     elif (
         new_status == TaskStatus.AWAITING_USER.value
         and task.status != TaskStatus.AWAITING_USER.value
-        and mode.key == "remediate"
+        and mode.response_ready is None
     ):
-        # Plan tasks treat awaiting_user as "plan is ready"; the plan_ready
-        # branch above already posted the plan, so don't also post a
-        # clarification ping here.
+        # Modes that auto-post Devin's prose (response_ready is set) treat
+        # awaiting_user as "the response is ready" — handled by the
+        # plan_ready branch above. For modes without that hook,
+        # awaiting_user means Devin has a clarification question.
         maybe_post_status_update(
             db=db,
             gh=gh,

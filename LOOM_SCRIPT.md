@@ -96,9 +96,9 @@ Stage directions are in **[brackets]**. Spoken text is plain. The demo is the **
 
 > "I want to be precise. I'm not selling AI agents in general — I'm selling Devin. Three reasons.
 >
-> **One: Devin actually changes code.** Most bots in this space watch a queue and post a string. Devin reads the repo, runs the relevant tests, opens a reviewable PR. The orchestrator only matters because the thing on the other end ships.
+> **One: Devin ships with a real execution environment, and that closes the loop.** Most coding agents in this space are autocomplete in a chat window — they generate a diff and hand it to a human to verify. Devin spins up a sandboxed VM per session, clones the repo, installs dependencies, runs your linter, runs your test suite, and *iterates on its own output until the tests pass*. When Devin opens a PR, it has empirically watched the change work — not predicted that it will. That's the difference between an AI suggestion and reviewable engineering work, and it's the thing the chat-style agents structurally cannot do without an environment behind them. It's also why the *plan* output is grounded — Devin can grep the actual code, not guess at file paths from training data.
 >
-> **Two: Devin asks good clarifying questions.** When uncertain, it pauses into an `awaiting_user` state. That's why a thread-based UX works — the conversation already has a home.
+> **Two: Devin asks good clarifying questions.** When uncertain, it pauses into an `awaiting_user` state instead of guessing. That's why a thread-based UX works — the conversation already has a home, and a security analyst can answer Devin's question in the same issue thread without ever opening an IDE.
 >
 > **Three, the architectural payoff:** Devin sessions are *durable and addressable*. My orchestrator only uses three Devin endpoints — sometimes a fourth call to `/messages` because the v3 session endpoint doesn't include conversation history. The same handful of calls power *both* the plan flow and the remediate flow. The difference between modes is in our prompts and reconciliation logic, not in needing different Devin features. *That's what makes Devin uniquely orchestrable* — one integration surface, an arbitrary number of productized workflows on top. Most agent products don't expose that surface."
 

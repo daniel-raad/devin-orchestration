@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from app.models import PLAN_PHASE_STATUSES, TaskStatus
 from app.prompts import (
     build_plan_followup_prompt,
     build_plan_prompt,
@@ -42,6 +43,7 @@ from app.prompts import (
 PromptBuilder = Callable[..., str]
 ResponseReady = Callable[[dict, Any], bool]
 ResponseFormatter = Callable[[str, Any], str]
+SessionStartedBody = Callable[[Any], str]
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,18 @@ class Mode:
     detect: Callable[[str], bool]
     build_prompt: PromptBuilder
     build_followup_prompt: PromptBuilder
+    # Initial task status when a fresh session is created in this mode.
+    # Each phase status is owned by exactly one mode; mode_for_status()
+    # is the inverse of this field.
+    initial_status: str
+    # Renders the "Devin started a session" GitHub comment for this mode.
+    # Takes the task so it can interpolate `task.devin_session_url`.
+    session_started_body: SessionStartedBody
+    # Suffix appended to a refusal comment when an active task in *this*
+    # mode receives an incoming request that would switch modes mid-flight.
+    # Tells the user how to resolve their request without abandoning the
+    # in-flight work.
+    switch_refusal_hint: str
     # When non-None, the poller will call response_ready(snapshot, task) on
     # each Devin poll; if True and we haven't posted yet, the orchestrator
     # posts Devin's latest_message (run through format_response) on the
@@ -163,12 +177,27 @@ def _plan_format_response(text: str, task: Any) -> str:
     )
 
 
+def _plan_session_started_body(task: Any) -> str:
+    return (
+        f"Devin is drafting a plan for this issue: {task.devin_session_url}.\n\n"
+        "I'll post the plan back here once Devin is done. "
+        "Add another `@devin` comment to refine the planning request "
+        "while it's in progress."
+    )
+
+
 PLAN = Mode(
     key="plan",
     label="Plan",
     detect=_is_plan_request,
     build_prompt=build_plan_prompt,
     build_followup_prompt=build_plan_followup_prompt,
+    initial_status=TaskStatus.PLANNING.value,
+    session_started_body=_plan_session_started_body,
+    switch_refusal_hint=(
+        "\n\nIf you want me to start implementing right now, wait until "
+        "the plan is posted and then comment `@devin go ahead`."
+    ),
     response_ready=_plan_response_ready,
     format_response=_plan_format_response,
     response_event_type="plan_posted",
@@ -180,12 +209,27 @@ PLAN = Mode(
 # ---------------------------------------------------------------------------
 
 
+def _remediate_session_started_body(task: Any) -> str:
+    return (
+        f"Devin remediation session started: {task.devin_session_url}.\n\n"
+        "I'll use this issue thread as the collaboration surface. "
+        "Add another `@devin` comment if you want to refine the task, "
+        "answer questions, or request changes."
+    )
+
+
 REMEDIATE = Mode(
     key="remediate",
     label="Remediate",
     detect=lambda body: True,
     build_prompt=build_remediate_prompt,
     build_followup_prompt=build_remediate_followup_prompt,
+    initial_status=TaskStatus.REMEDIATING.value,
+    session_started_body=_remediate_session_started_body,
+    switch_refusal_hint=(
+        "\n\nIf you'd rather have a plan, wait for this remediation to "
+        "complete (or fail), then comment `@devin plan ...` again."
+    ),
     response_ready=None,  # remediate posts PR/completion status events, not Devin's prose
 )
 
@@ -220,9 +264,6 @@ def mode_for_status(status: str | None) -> Mode:
     `mode` column on the task — the phase status already says whether
     Devin is in a plan-style or remediate-style conversation.
     """
-    # Lazy import to avoid a circular dependency between modes ↔ models.
-    from app.models import PLAN_PHASE_STATUSES
-
     if status in PLAN_PHASE_STATUSES:
         return PLAN
     return REMEDIATE
