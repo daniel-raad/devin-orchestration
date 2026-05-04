@@ -181,3 +181,16 @@ All of the above have further instructions in [docs/EXTENDED.md](docs/EXTENDED.m
 - Polls Devin every 45s instead of receiving webhooks - ideally would be Devin webhook events we can track. 
 - No dashboard auth 
 
+---
+
+## Next steps
+
+If this were heading toward production, the highest-leverage things to add:
+
+- **Postgres + multi-worker uvicorn.** SQLite + a single worker is the prototype's main scaling ceiling.
+- **Devin webhooks instead of polling.** Removes the 45s reconciliation lag and the per-task poll budget.
+- **Dashboard auth (OIDC).** Currently relies on network-level isolation; needs real auth before exposure.
+- **Exponential backoff on transient 5xx / 429** from Devin and GitHub. Right now a flaky upstream can fail a task that would have recovered.
+- **Severity-based approval gates.** Auto-PR for low-risk fixes; require human sign-off before Devin touches sensitive paths.
+- **Scanner ingestion** (Dependabot, Semgrep, Snyk) so the orchestrator can act on findings, not just `@devin` mentions.
+
