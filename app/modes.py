@@ -89,6 +89,15 @@ _PLAN_VERBS = {"plan", "planning", "replan", "rethink", "propose", "outline", "d
 # Used to filter out false positives like "@devin we have a plan".
 _PLAN_ARTICLES = {"a", "the", "my", "your", "our", "their", "its", "his", "her"}
 
+# Verbs that, when sitting in front of `<article> plan`, mean the user is
+# asking us to *produce* a plan — so the article-filter rejection of "noun
+# usage" should be reversed. Without this, "create a plan to fix this" was
+# being misclassified as remediate because `a` flagged `plan` as a noun.
+_PLAN_CREATION_VERBS = {
+    "create", "make", "draft", "write", "build",
+    "propose", "design", "outline", "produce", "prepare",
+}
+
 _PLAN_PHRASE_MARKERS = (
     "plan a solution",
     "plan the fix",
@@ -114,16 +123,24 @@ def _is_plan_request(body: str) -> bool:
 
     Scans the first ~8 tokens after `@devin` for a plan verb. To avoid
     false positives on noun usage ("a plan", "the plan", "my plan"), we
-    skip plan verbs immediately preceded by an article. Catches:
+    skip plan verbs immediately preceded by an article — UNLESS the token
+    before the article is itself a creation verb ("create a plan",
+    "make a plan", "write a plan"), in which case the user is still
+    asking us to produce a plan.
+
+    Catches:
 
       - "@devin plan a solution"
       - "@devin can you replan"
       - "@devin continue planning"
       - "@devin let's plan a different approach"
+      - "@devin can you please create a plan to fix this issue?"
+      - "@devin please make a plan"
 
     But correctly rejects:
 
       - "@devin we have a plan, please remediate"
+      - "@devin the plan is documented elsewhere; just go fix it"
       - "@devin remediate this"
     """
     text = (body or "").lower()
@@ -138,7 +155,11 @@ def _is_plan_request(body: str) -> bool:
         if token in _PLAN_VERBS:
             prev = tokens[i - 1] if i > 0 else ""
             if prev in _PLAN_ARTICLES:
-                # Noun usage like "a plan" / "the plan" — skip.
+                prev_prev = tokens[i - 2] if i >= 2 else ""
+                if prev_prev in _PLAN_CREATION_VERBS:
+                    # "create a plan" / "make a plan" — plan request.
+                    return True
+                # Otherwise noun usage like "have a plan" / "the plan" — skip.
                 continue
             return True
 

@@ -28,6 +28,15 @@ from app.modes import MODE_REGISTRY, PLAN, REMEDIATE, detect_mode, get_mode
         "@devin let's plan a different approach",
         "@devin keep planning, but reject backslashes",
         "@devin replan, the previous approach was wrong",
+        # Creation-verb-before-article rescue: the article filter would
+        # otherwise reject these as noun usage, but the creation verb in
+        # front means the user is asking us to produce a plan.
+        "@devin, can you please create a plan to fix this issue?",
+        "@devin please make a plan for this",
+        "@devin write a plan",
+        "@devin produce a plan",
+        "@devin prepare a plan",
+        "@devin build a plan and share it",
     ],
 )
 def test_detect_mode_picks_plan(body):
