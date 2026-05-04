@@ -13,258 +13,122 @@ export interface LifecycleView {
   awaitingUser: boolean;
 }
 
-const STEP_KEYS = ["issue", "plan", "devin", "pr", "review", "done"] as const;
-const STEP_LABELS: Record<(typeof STEP_KEYS)[number], string> = {
-  issue: "Issue",
-  plan: "Plan",
-  devin: "Devin",
-  pr: "PR",
-  review: "Review",
-  done: "Done",
+const STEPS = [
+  { key: "issue", label: "Issue" },
+  { key: "plan", label: "Plan" },
+  { key: "devin", label: "Devin" },
+  { key: "pr", label: "PR" },
+  { key: "review", label: "Review" },
+  { key: "done", label: "Done" },
+] as const;
+
+const PR_INDEX = 3;
+const FINAL_INDEX = STEPS.length - 1;
+
+// Each status is described by where the task currently sits and the state of that step.
+// Optional flags handle the genuine edge cases:
+//   cascade        — failure propagates to every later step (else only the terminal "done" cell fails)
+//   prIndependent  — "pr" step shows done if a PR exists, even when flow hasn't reached it
+//   awaitingUser   — the indicator pulses to ask the human for input
+interface StatusShape {
+  step: number;
+  state: StepState;
+  cascade?: boolean;
+  prIndependent?: boolean;
+  awaitingUser?: boolean;
+}
+
+const SHAPES: Record<TaskStatus, StatusShape> = {
+  pending:         { step: 0, state: "done" },
+  planning:        { step: 1, state: "active" },
+  plan_posted:     { step: 1, state: "done", awaitingUser: true },
+  remediating:     { step: 2, state: "active" },
+  awaiting_user:   { step: 2, state: "active", prIndependent: true, awaitingUser: true },
+  pr_opened:       { step: 4, state: "active" },
+  done:            { step: 5, state: "done" },
+  closed_unmerged: { step: 4, state: "failed" },
+  closed_unfixed:  { step: 2, state: "failed", cascade: true },
+  failed:          { step: 2, state: "failed", prIndependent: true },
 };
 
-function build(states: Record<(typeof STEP_KEYS)[number], StepState>): LifecycleStep[] {
-  return STEP_KEYS.map((k) => ({ key: k, label: STEP_LABELS[k], state: states[k] }));
+export function lifecycleFor(status: TaskStatus, hasPr: boolean): LifecycleView {
+  const shape = SHAPES[status] ?? SHAPES.pending;
+  const failed = shape.state === "failed";
+
+  const states: StepState[] = STEPS.map((_, i) => {
+    if (i < shape.step) return "done";
+    if (i === shape.step) return shape.state;
+    if (failed && (shape.cascade || i === FINAL_INDEX)) return "failed";
+    return "pending";
+  });
+
+  if (shape.prIndependent && hasPr) states[PR_INDEX] = "done";
+
+  const steps = STEPS.map((s, i) => ({ ...s, state: states[i] }));
+  return { steps, awaitingUser: !!shape.awaitingUser };
 }
 
-export function lifecycleFor(status: TaskStatus, hasPr: boolean): LifecycleView {
-  switch (status) {
-    case "pending":
-      return {
-        steps: build({
-          issue: "done",
-          plan: "pending",
-          devin: "pending",
-          pr: "pending",
-          review: "pending",
-          done: "pending",
-        }),
-        awaitingUser: false,
-      };
-    case "planning":
-      return {
-        steps: build({
-          issue: "done",
-          plan: "active",
-          devin: "pending",
-          pr: "pending",
-          review: "pending",
-          done: "pending",
-        }),
-        awaitingUser: false,
-      };
-    case "plan_posted":
-      return {
-        steps: build({
-          issue: "done",
-          plan: "done",
-          devin: "pending",
-          pr: "pending",
-          review: "pending",
-          done: "pending",
-        }),
-        awaitingUser: true,
-      };
-    case "remediating":
-      return {
-        steps: build({
-          issue: "done",
-          plan: "done",
-          devin: "active",
-          pr: "pending",
-          review: "pending",
-          done: "pending",
-        }),
-        awaitingUser: false,
-      };
-    case "awaiting_user":
-      return {
-        steps: build({
-          issue: "done",
-          plan: "done",
-          devin: "active",
-          pr: hasPr ? "done" : "pending",
-          review: "pending",
-          done: "pending",
-        }),
-        awaitingUser: true,
-      };
-    case "pr_opened":
-      return {
-        steps: build({
-          issue: "done",
-          plan: "done",
-          devin: "done",
-          pr: "done",
-          review: "active",
-          done: "pending",
-        }),
-        awaitingUser: false,
-      };
-    case "done":
-      return {
-        steps: build({
-          issue: "done",
-          plan: "done",
-          devin: "done",
-          pr: "done",
-          review: "done",
-          done: "done",
-        }),
-        awaitingUser: false,
-      };
-    case "closed_unmerged":
-      return {
-        steps: build({
-          issue: "done",
-          plan: "done",
-          devin: "done",
-          pr: "done",
-          review: "failed",
-          done: "failed",
-        }),
-        awaitingUser: false,
-      };
-    case "closed_unfixed":
-      return {
-        steps: build({
-          issue: "done",
-          plan: "done",
-          devin: "failed",
-          pr: "failed",
-          review: "failed",
-          done: "failed",
-        }),
-        awaitingUser: false,
-      };
-    case "failed":
-      return {
-        steps: build({
-          issue: "done",
-          plan: "done",
-          devin: "failed",
-          pr: hasPr ? "done" : "pending",
-          review: "pending",
-          done: "failed",
-        }),
-        awaitingUser: false,
-      };
-    default:
-      return {
-        steps: build({
-          issue: "done",
-          plan: "pending",
-          devin: "pending",
-          pr: "pending",
-          review: "pending",
-          done: "pending",
-        }),
-        awaitingUser: false,
-      };
-  }
-}
+const STATUS_LABELS: Record<TaskStatus, string> = {
+  pending: "Pending",
+  planning: "Planning",
+  plan_posted: "Plan posted",
+  remediating: "Remediating",
+  awaiting_user: "Awaiting user",
+  pr_opened: "Awaiting review",
+  done: "Done",
+  closed_unmerged: "Closed (unmerged)",
+  closed_unfixed: "Closed without fix",
+  failed: "Failed",
+};
 
 export function statusDisplayLabel(status: TaskStatus): string {
-  switch (status) {
-    case "pending":
-      return "Pending";
-    case "planning":
-      return "Planning";
-    case "plan_posted":
-      return "Plan posted";
-    case "remediating":
-      return "Remediating";
-    case "awaiting_user":
-      return "Awaiting user";
-    case "pr_opened":
-      return "Awaiting review";
-    case "done":
-      return "Done";
-    case "closed_unmerged":
-      return "Closed (unmerged)";
-    case "closed_unfixed":
-      return "Closed without fix";
-    case "failed":
-      return "Failed";
-    default:
-      return status;
-  }
+  return STATUS_LABELS[status] ?? status;
 }
+
+const EVENT_LABELS: Record<string, string> = {
+  session_started: "Session started",
+  followup_forwarded: "Follow-up forwarded",
+  phase_transition: "Phase transition",
+  plan_posted: "Plan posted",
+  pr_opened: "PR opened",
+  done: "Merged",
+  completed: "Completed",
+  failed: "Failed",
+  closed_unmerged: "PR closed unmerged",
+  closed_unfixed: "Closed without fix",
+  clarification_requested: "Awaiting user clarification",
+  user_instruction: "User instruction received",
+  devin_response: "Devin responded",
+  status_update: "Status update",
+  error: "Error",
+};
+
+// Status-derived fallback when no recent event_type is known. Diverges intentionally from
+// STATUS_LABELS — this describes what's *happening*, not the status name.
+const STATUS_INTERACTION: Record<TaskStatus, string> = {
+  pending: "Issue detected",
+  planning: "Devin drafting plan",
+  plan_posted: "Plan posted, awaiting user",
+  remediating: "Devin remediating",
+  awaiting_user: "Awaiting user clarification",
+  pr_opened: "Awaiting review",
+  done: "Done",
+  closed_unmerged: "PR closed unmerged",
+  closed_unfixed: "Closed without fix",
+  failed: "Failed",
+};
 
 export function latestInteractionLabel(status: TaskStatus, lastEventType?: string | null): string {
-  if (lastEventType) {
-    switch (lastEventType) {
-      case "session_started":
-        return "Session started";
-      case "followup_forwarded":
-        return "Follow-up forwarded";
-      case "phase_transition":
-        return "Phase transition";
-      case "plan_posted":
-        return "Plan posted";
-      case "pr_opened":
-        return "PR opened";
-      case "done":
-        return "Merged";
-      case "completed":
-        return "Completed";
-      case "failed":
-        return "Failed";
-      case "closed_unmerged":
-        return "PR closed unmerged";
-      case "closed_unfixed":
-        return "Closed without fix";
-      case "clarification_requested":
-        return "Awaiting user clarification";
-      case "user_instruction":
-        return "User instruction received";
-      case "devin_response":
-        return "Devin responded";
-      case "status_update":
-        return "Status update";
-      case "error":
-        return "Error";
-      default:
-        // Fall through and derive from status.
-        break;
-    }
-  }
-  switch (status) {
-    case "pending":
-      return "Issue detected";
-    case "planning":
-      return "Devin drafting plan";
-    case "plan_posted":
-      return "Plan posted, awaiting user";
-    case "remediating":
-      return "Devin remediating";
-    case "awaiting_user":
-      return "Awaiting user clarification";
-    case "pr_opened":
-      return "Awaiting review";
-    case "done":
-      return "Done";
-    case "closed_unmerged":
-      return "PR closed unmerged";
-    case "closed_unfixed":
-      return "Closed without fix";
-    case "failed":
-      return "Failed";
-    default:
-      return "—";
-  }
+  if (lastEventType && EVENT_LABELS[lastEventType]) return EVENT_LABELS[lastEventType];
+  return STATUS_INTERACTION[status] ?? "—";
 }
+
+const TRIGGER_LABELS: Record<string, string> = {
+  github_comment: "@devin comment",
+  simulated: "Simulated comment",
+  manual_ui: "Manual UI instruction",
+};
 
 export function triggerLabel(trigger?: string | null): string {
-  switch (trigger) {
-    case "github_comment":
-      return "@devin comment";
-    case "simulated":
-      return "Simulated comment";
-    case "manual_ui":
-      return "Manual UI instruction";
-    default:
-      return "@devin comment";
-  }
+  return (trigger && TRIGGER_LABELS[trigger]) || "@devin comment";
 }
-

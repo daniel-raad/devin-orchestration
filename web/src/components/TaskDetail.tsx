@@ -4,7 +4,7 @@ import type {
   InteractionEvent,
   TaskDetail as TaskDetailType,
 } from "../types";
-import { fmtDate, fmtSecondsAsMinutes } from "../lib/format";
+import { fmtDate, fmtSecondsAsMinutes, prShort } from "../lib/format";
 import {
   latestInteractionLabel,
   lifecycleFor,
@@ -30,63 +30,35 @@ interface FallbackEvent {
 
 function buildFallbackTimeline(detail: TaskDetailType): FallbackEvent[] {
   const { task } = detail;
-  const events: FallbackEvent[] = [
-    {
-      id: "fb-issue",
-      source: "github",
-      event_type: "issue_detected",
+  const prTime = task.last_devin_update_at || task.updated_at;
+  const candidates: (FallbackEvent | null)[] = [
+    { id: "fb-issue", source: "github", event_type: "issue_detected",
       body: `Issue #${task.issue_number} detected: ${task.issue_title || "(no title)"}`,
-      created_at: task.created_at,
-    },
+      created_at: task.created_at },
+    (task.devin_session_id || task.devin_session_url)
+      ? { id: "fb-session", source: "orchestrator", event_type: "session_started",
+          body: task.devin_session_url ? `Devin session started: ${task.devin_session_url}` : "Devin session started",
+          created_at: task.created_at }
+      : null,
+    task.pr_url
+      ? { id: "fb-pr", source: "devin", event_type: "pr_opened",
+          body: `PR opened: ${task.pr_url}`, created_at: prTime }
+      : null,
+    task.pr_url
+      ? { id: "fb-review", source: "orchestrator", event_type: "awaiting_review",
+          body: "Awaiting human review of the Devin-authored PR.", created_at: prTime }
+      : null,
+    task.status === "done"
+      ? { id: "fb-done", source: "devin", event_type: "done",
+          body: "Devin's PR was merged.", created_at: task.updated_at }
+      : null,
+    task.status === "failed"
+      ? { id: "fb-failed", source: "devin", event_type: "failed",
+          body: task.error ? `Devin reported a failure: ${task.error}` : "Devin reported a failure.",
+          created_at: task.updated_at }
+      : null,
   ];
-  if (task.devin_session_id || task.devin_session_url) {
-    events.push({
-      id: "fb-session",
-      source: "orchestrator",
-      event_type: "session_started",
-      body: task.devin_session_url
-        ? `Devin session started: ${task.devin_session_url}`
-        : "Devin session started",
-      created_at: task.created_at,
-    });
-  }
-  if (task.pr_url) {
-    events.push({
-      id: "fb-pr",
-      source: "devin",
-      event_type: "pr_opened",
-      body: `PR opened: ${task.pr_url}`,
-      created_at: task.last_devin_update_at || task.updated_at,
-    });
-    events.push({
-      id: "fb-review",
-      source: "orchestrator",
-      event_type: "awaiting_review",
-      body: "Awaiting human review of the Devin-authored PR.",
-      created_at: task.last_devin_update_at || task.updated_at,
-    });
-  }
-  if (task.status === "done") {
-    events.push({
-      id: "fb-done",
-      source: "devin",
-      event_type: "done",
-      body: "Devin's PR was merged.",
-      created_at: task.updated_at,
-    });
-  }
-  if (task.status === "failed") {
-    events.push({
-      id: "fb-failed",
-      source: "devin",
-      event_type: "failed",
-      body: task.error
-        ? `Devin reported a failure: ${task.error}`
-        : "Devin reported a failure.",
-      created_at: task.updated_at,
-    });
-  }
-  return events;
+  return candidates.filter((e): e is FallbackEvent => e !== null);
 }
 
 function sourceTag(source: EventSource): string {
@@ -242,10 +214,7 @@ export function TaskDetail({ detail, onClose, onChange }: Props) {
                     {task.previous_pr_urls.map((u) => (
                       <li key={u}>
                         <a href={u} target="_blank" rel="noopener noreferrer">
-                          {u.match(/\/pull\/(\d+)/)?.[0]
-                            ? `PR ${u.match(/\/pull\/(\d+)/)?.[1]}`
-                            : u}{" "}
-                          ↗
+                          PR {prShort(u)} ↗
                         </a>
                       </li>
                     ))}

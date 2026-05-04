@@ -42,9 +42,10 @@ docker compose up --build
 
 ### Drive it from the dashboard
 
-Open http://localhost:5173, expand **Simulate workflow**, click **Simulate
-@devin comment**. A task appears in the table; click **Details** to see the
-interaction timeline and send a follow-up.
+Open http://localhost:5173, click **Demo & diagnostics** (top right) to
+reveal the tools panel, then click **Simulate @devin comment**. A task
+appears in the table; click **Details** to see the interaction timeline
+and send a follow-up.
 
 ### Drive it from curl
 
@@ -84,7 +85,7 @@ real GitHub webhook — only the transport differs.
 | Rate limit + bounded-concurrency poller           | `make test` (`tests/test_hardening.py`)            |
 | Metrics calculation                               | `make test` (`tests/test_metrics.py`)              |
 | Full code path via `/api/simulate-comment`        | `make test` (`tests/test_simulation.py`)           |
-| Dashboard rendering, lifecycle indicator, simulate panel, follow-up box | docker compose + browser at http://localhost:5173 |
+| Dashboard rendering, lifecycle indicator, Demo & diagnostics panel, follow-up box | docker compose + browser at http://localhost:5173 |
 
 ## What requires external setup
 

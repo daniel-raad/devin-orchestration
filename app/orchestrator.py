@@ -36,13 +36,23 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _naive_utc(d: datetime) -> datetime:
+    """SQLite rebinds tz-aware datetimes as naive on round-trip; coerce both
+    sides to naive UTC before any comparison or subtraction."""
+    if d.tzinfo is None:
+        return d
+    return d.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def _seconds_between(later: datetime, earlier: datetime) -> int:
-    """SQLite drops tz info on round-trip; normalize both sides before subtracting."""
-    def _naive_utc(d: datetime) -> datetime:
-        if d.tzinfo is None:
-            return d
-        return d.astimezone(timezone.utc).replace(tzinfo=None)
     return max(int((_naive_utc(later) - _naive_utc(earlier)).total_seconds()), 0)
+
+
+def _is_strictly_after(later: datetime, earlier: datetime) -> bool:
+    """Sub-second-aware ordering. _seconds_between int-truncates and clamps
+    to 0, which can't distinguish "later by 100ms" from "exactly equal" —
+    that breaks freshness checks within a single test/poll cycle."""
+    return _naive_utc(later) > _naive_utc(earlier)
 
 
 def comment_mentions_devin(body: str | None) -> bool:
@@ -819,6 +829,22 @@ def _forward_followup(
         db.commit()
         return {"action": "followup_failed", "task_id": task.id, "error": str(exc)}
 
+    # Mark this follow-up as awaiting a Devin reply, but only on
+    # `pr_opened` — that's the phase where there's no other code path
+    # (plan_posted, clarification_requested, pr_opened) that surfaces
+    # Devin's prose back to GitHub, so chat-style replies otherwise vanish.
+    # The marker is consumed by _maybe_post_followup_reply on a later poll.
+    if task.status == TaskStatus.PR_OPENED.value:
+        _record_event(
+            db,
+            task_id=task.id,
+            source="orchestrator",
+            event_type="followup_pending",
+            body="(awaiting Devin reply for this follow-up)",
+            github_comment_id=github_comment_id,
+            github_comment_url=comment_url,
+        )
+
     body = (
         f"Forwarded this update to the existing Devin session: {task.devin_session_url}."
     )
@@ -1248,6 +1274,7 @@ def refresh_task_from_devin(
 
     task.status = new_status
 
+    prior_response_body: str = ""
     if latest_message:
         # Record a single devin_response event per latest message change.
         last_devin = (
@@ -1260,7 +1287,8 @@ def refresh_task_from_devin(
             .order_by(InteractionEvent.id.desc())
             .first()
         )
-        if not last_devin or (last_devin.body or "") != latest_message:
+        prior_response_body = (last_devin.body if last_devin else None) or ""
+        if prior_response_body != latest_message:
             _record_event(
                 db,
                 task_id=task.id,
@@ -1270,5 +1298,108 @@ def refresh_task_from_devin(
             )
             task.last_devin_update_at = now
 
+    # Surface Devin's reply to a `pr_opened` follow-up question, if it's
+    # ready. No-op when no marker exists or the settle gate isn't satisfied.
+    _maybe_post_followup_reply(
+        db=db,
+        gh=gh,
+        task=task,
+        latest_message=latest_message or "",
+        prior_response_body=prior_response_body,
+    )
+
     db.commit()
     return task
+
+
+_FOLLOWUP_REPLY_MIN_CHARS = 60
+
+
+def _maybe_post_followup_reply(
+    *,
+    db: Session,
+    gh: Any,
+    task: RemediationTask,
+    latest_message: str,
+    prior_response_body: str,
+) -> None:
+    """Settle gate for chat-style follow-up replies on `pr_opened` tasks.
+
+    Posts Devin's `latest_message` back to the issue iff *all* of these
+    hold; on any failure the marker is left open and a later poll retries.
+
+    1. task.status is `pr_opened`. Other phases have their own posting
+       paths (plan_posted, clarification_requested, pr_opened); only
+       pr_opened follow-up replies otherwise vanish into the Devin session.
+    2. There's an unconsumed `followup_pending` marker — i.e. the most
+       recent followup_pending has no later followup_replied event.
+    3. `task.last_devin_update_at > pending.created_at` so the message is
+       provably fresher than the user's question (rules out posting a
+       pre-existing message that happened to look stable).
+    4. The message is stable across polls: `prior_response_body ==
+       latest_message`. First observation always fails this and waits one
+       cycle; second observation of the same body confirms Devin has
+       moved on. Without this we'd risk posting an interim "looking into
+       it" note before the real answer settles.
+    5. The message is substantive (>= 60 chars), matching the plan-mode
+       length floor — keeps one-line progress chatter from tripping the post.
+    """
+    if task.status != TaskStatus.PR_OPENED.value:
+        return
+    if not latest_message or len(latest_message) < _FOLLOWUP_REPLY_MIN_CHARS:
+        return
+    if prior_response_body != latest_message:
+        return
+    if task.last_devin_update_at is None:
+        return
+
+    pending = (
+        db.query(InteractionEvent)
+        .filter(
+            InteractionEvent.task_id == task.id,
+            InteractionEvent.source == "orchestrator",
+            InteractionEvent.event_type == "followup_pending",
+        )
+        .order_by(InteractionEvent.id.desc())
+        .first()
+    )
+    if pending is None:
+        return
+
+    replied = (
+        db.query(InteractionEvent)
+        .filter(
+            InteractionEvent.task_id == task.id,
+            InteractionEvent.source == "orchestrator",
+            InteractionEvent.event_type == "followup_replied",
+        )
+        .order_by(InteractionEvent.id.desc())
+        .first()
+    )
+    if replied is not None and replied.id > pending.id:
+        return
+
+    if not _is_strictly_after(task.last_devin_update_at, pending.created_at):
+        return
+
+    body = "**Devin replied to the follow-up:**\n\n" + latest_message
+    posted = _safe_post(
+        gh,
+        repo_full_name=task.repo_full_name,
+        issue_number=task.issue_number,
+        body=body,
+    )
+    if posted is None:
+        # Transient GitHub failure — don't record consumption, retry next poll.
+        return
+
+    cid, url = _posted_meta(posted)
+    _record_event(
+        db,
+        task_id=task.id,
+        source="orchestrator",
+        event_type="followup_replied",
+        body=f"replied to followup_pending #{pending.id}",
+        github_comment_id=cid,
+        github_comment_url=url,
+    )

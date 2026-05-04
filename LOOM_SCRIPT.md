@@ -275,6 +275,6 @@ The question *"is Devin actually working?"* is unanswerable from a row. It's ans
 
 ## "How is it tested?"
 
-- **73 tests, ~1,960 lines of pytest across nine test files.** All external Devin and GitHub calls mocked, so the suite runs **with no credentials** — anyone can clone and `make test`.
+- **115 tests, ~2,094 lines of pytest across ten test files.** All external Devin and GitHub calls mocked, so the suite runs **with no credentials** — anyone can clone and `make test`.
 - Coverage hits webhook parsing + `[bot]` filter, signature verification, idempotent session creation, follow-up forwarding, mode detection including article-guarded false-positive rejection (`test_modes.py`), the plan→implement *in-place transition* end-to-end (`test_plan_route.py`), the `pr_opened`-replan path with superseded-PR ledger and PR-side annotation, rate limiting, mode-mismatch refusal, the orchestrator-lock race scenarios (`test_hardening.py`), GitHub comment posting + dedupe-on-failure (transient post failures don't dedupe so the next poll retries), metrics, and the simulation endpoint.
 - Built test-first — the test names read like a spec for the orchestrator's behavior.
