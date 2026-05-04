@@ -393,23 +393,6 @@ shown (Issue detected → Devin session started → PR opened → Awaiting revie
 Webhook endpoint, Devin API, GitHub API, Database, last refresh time —
 sourced from `/api/health`.
 
-### Manual UI verification checklist
-
-The frontend has no automated test framework wired up. To verify the
-dashboard manually:
-
-- [ ] Dashboard loads at http://localhost:5173.
-- [ ] Architecture strip renders.
-- [ ] Metric cards render. Missing metrics show `—`, not a crash.
-- [ ] System health card shows configured/unknown status.
-- [ ] Task table renders with the new columns.
-- [ ] Lifecycle indicator appears in each row and in the detail panel.
-- [ ] **Details** button opens the side panel (and Esc / overlay click closes it).
-- [ ] Tasks with `pr_opened` show as **Awaiting review** (not Completed).
-- [ ] Follow-up instruction form sends to `POST /api/tasks/{id}/send`.
-- [ ] Simulation form runs `POST /api/simulate-comment` and refreshes the table.
-- [ ] Empty / loading / error states render correctly.
-
 ---
 
 ## Plan-route demo (60 seconds)
@@ -426,21 +409,6 @@ dashboard manually:
    `time_to_completion_seconds` populated. No PR was opened.
 5. Reply on the issue: `@devin go ahead and implement this plan`. A *new*
    task is created with `mode=remediate` and Devin starts working a PR.
-
----
-
-## 5-minute remediation demo
-
-1. Open the dashboard at http://localhost:5173 next to a GitHub issue.
-2. On the issue, comment `@devin please remediate this vulnerability`.
-3. Watch the orchestrator find or create a Devin session (timeline event
-   appears within seconds).
-4. Show the new task on the dashboard, the bumped metric cards, and the
-   `Devin remediation session started` comment posted back on the issue.
-5. From the dashboard task detail, send a follow-up instruction
-   (`@devin also add a regression test for invalid filenames`).
-6. Show the PR link populating once Devin opens one (or click Refresh on the
-   row to force a poll).
 
 ---
 
