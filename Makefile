@@ -1,13 +1,27 @@
-.PHONY: install test run docker-up docker-down docker-test fmt
+.PHONY: install test run docker-up docker-down docker-test fmt clean-venv
 
-install:
-	pip install -r requirements.txt
+VENV := .venv
+PY := $(VENV)/bin/python
+PIP := $(VENV)/bin/pip
+PYTEST := $(VENV)/bin/pytest
+UVICORN := $(VENV)/bin/uvicorn
 
-test:
-	PYTHONPATH=. pytest -q
+$(VENV)/.installed: requirements.txt
+	python3 -m venv $(VENV)
+	$(PIP) install --upgrade pip
+	$(PIP) install -r requirements.txt
+	touch $@
 
-run:
-	PYTHONPATH=. uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+install: $(VENV)/.installed
+
+test: $(VENV)/.installed
+	PYTHONPATH=. $(PYTEST) -q
+
+run: $(VENV)/.installed
+	PYTHONPATH=. $(UVICORN) app.main:app --host 0.0.0.0 --port 8000 --reload
+
+clean-venv:
+	rm -rf $(VENV)
 
 docker-up:
 	docker compose up --build
