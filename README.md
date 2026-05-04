@@ -2,8 +2,9 @@
 
 Turns `@devin` comments on GitHub issues into Devin remediation sessions, uses
 the issue thread as the human-in-the-loop chat surface, and exposes a
-dashboard so an engineering leader can answer *"How do I know Devin is
-actually working?"*
+metrics and tracking dashboard. 
+
+📹 **Walkthrough video:** https://www.loom.com/share/9dc9826f731f416c90144d3ea776e7ee
 
 ```
 @devin comment on issue  →  Orchestrator  →  Devin session  →  PR opened  →  Status comments back on the issue
@@ -12,8 +13,6 @@ actually working?"*
 ```
 
 ---
-
-## TL;DR for reviewers
 
 You can demo and verify the entire orchestration without any GitHub or Devin
 credentials. Two paths:
@@ -96,34 +95,7 @@ real GitHub webhook — only the transport differs.
 | Status comments authored as `<app>[bot]`    | A GitHub App + private key                                 |
 | `pull_request.closed` → `done` transition   | The webhook subscribed to **Issues** and **Pull requests** |
 
-All of the above are walked through step-by-step in [docs/EXTENDED.md](docs/EXTENDED.md).
-
----
-
-## Repo layout
-
-```
-app/                       FastAPI service
-├── main.py                app factory + lifespan
-├── webhooks.py            POST /webhooks/github
-├── api.py                 /api/* (tasks, metrics, simulate, send, refresh)
-├── orchestrator.py        core state machine (start here to read the logic)
-├── modes.py               plan / remediate routing registry
-├── prompts.py             Devin prompt templates
-├── devin_client.py        Devin v3 API client + adapter
-├── github_client.py       GitHub REST client + signature verification + App auth
-├── poller.py              background reconciliation worker
-├── metrics.py             compute_metrics()
-└── models.py              SQLAlchemy: RemediationTask, InteractionEvent
-tests/                     pytest suite — Devin + GitHub fully mocked
-web/                       React + Vite dashboard
-docker-compose.yml         app + web services
-docs/EXTENDED.md           full setup, GitHub App auth, modes, hardening
-```
-
-The two files most worth reading to understand the system are
-`app/orchestrator.py` (the state machine) and `app/modes.py` (how `@devin`
-comments get routed to plan vs. remediate).
+All of the above have further instructions in [docs/EXTENDED.md](docs/EXTENDED.md).
 
 ---
 
@@ -131,10 +103,6 @@ comments get routed to plan vs. remediate).
 
 - SQLite in a Docker volume — fine for the prototype; swap to Postgres via
   `DATABASE_URL` for production.
-- Polls Devin every 45s instead of receiving webhooks; would flip when Devin
-  ships outbound webhooks.
-- No auto-merge — Devin opens PRs, humans review and merge. The dashboard
-  distinguishes *Awaiting review* from *Completed* on purpose.
-- No dashboard auth — put it behind a VPN / auth proxy in any non-toy use.
+- Polls Devin every 45s instead of receiving webhooks - ideally would be Devin webhook events we can track. 
+- No dashboard auth 
 
-Full list, hardening characteristics, and roadmap: [docs/EXTENDED.md](docs/EXTENDED.md).
