@@ -87,6 +87,12 @@ org has access to — Devin will try to clone it and operate on real code.
 Pointing it at a non-existent repo will start a session, but Devin won't
 have anything to work on.
 
+> **Devin's GitHub access is separate from this orchestrator's
+> `GITHUB_TOKEN`.** The Devin GitHub App must be installed on the target
+> org/repo (Devin → Settings → Integrations → GitHub). The `GITHUB_TOKEN`
+> in `.env` is only used by *this orchestrator* to post status comments
+> back on the issue thread.
+
 ```bash
 curl -X POST http://localhost:8000/api/simulate-comment \
   -H "Content-Type: application/json" \
@@ -110,6 +116,33 @@ the request body since there's no webhook payload to read it from.
 It calls the real Devin API when `DEVIN_API_KEY` + `DEVIN_ORG_ID` are set;
 without them the call fails immediately. For a fully mocked credential-free
 pass through the orchestration, run `make test` instead.
+
+### Operating the stack
+
+```bash
+docker compose logs -f app   # tail backend logs (orchestrator + poller)
+docker compose logs -f web   # tail Vite/React dev-server logs
+make docker-down             # stop & remove containers (preserves SQLite data)
+rm -rf ./data                # nuke the SQLite DB if you want a clean slate
+```
+
+Lifecycle expectations:
+
+- The poller reconciles Devin every **45s** (`POLLER_INTERVAL_SECONDS`),
+  so a freshly-created task sits in `remediating` for up to that long
+  before transitioning to `pr_opened` / `completed`. If you want faster
+  feedback while testing, lower it in `.env`.
+- Tasks persist in `./data/devin.db` (host bind mount declared in
+  `docker-compose.yml`, gitignored). They survive `docker compose down`;
+  delete the directory (above) to start clean.
+- `docker compose` (including `down`) reads `.env` at project-load time
+  even if no var is referenced. If you've deleted `.env`, recreate a
+  stub (`cp .env.example .env`) before running compose commands —
+  otherwise it errors with `env file ... not found`.
+
+Build flake: if `npm install` fails during the first `web` image build
+with `ECONNRESET`, just re-run `docker compose up --build` — npm registry
+hiccups are usually transient.
 
 ---
 
