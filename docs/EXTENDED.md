@@ -26,25 +26,6 @@ GitHub issue comment "@devin"
                        Status comments back on the issue thread
 ```
 
-Layers:
-
-- **GitHub** is the *collaboration* layer. Humans talk to Devin where they
-  already work — in the issue thread.
-- **FastAPI** is the *orchestration / control* layer. It enforces idempotency
-  (one active session per issue), de-duplicates noisy comments, and reconciles
-  Devin state with our own.
-- **Devin** is the *execution* layer. It can read the repo, change code, run
-  tests, ask questions, and open PRs.
-- **The React dashboard** is the *observability* layer. Metrics, task list,
-  interaction timeline, and a simulate-comment panel for demos.
-
-> **"If it's running in Docker, why do I need a tunnel?"**
-> Docker just runs the containers locally with port forwarding;
-> `localhost:8000` is only reachable from your laptop. GitHub's webhook
-> system is on the public internet and needs to make an HTTP POST *to* you.
-> The `/api/simulate-comment` endpoint runs the same orchestration code path
-> with no tunnel required — useful for development and reviewer demos.
-
 ---
 
 ## Environment variables
@@ -91,14 +72,6 @@ ngrok http 8000
 
 ngrok prints a public URL like `https://3ed7-2a02-…ngrok-free.app`. Note it.
 
-> **ngrok free tier caveats**
-> - The hostname changes each time ngrok restarts; you'll have to update the
->   webhook URL on GitHub when that happens. Pin a domain on a paid tier or
->   use `cloudflared tunnel --url` with a named tunnel for stability.
-> - The free tier shows a browser warning page on GETs. Webhook POSTs from
->   GitHub go through cleanly — this only affects you if you try to open the
->   tunneled URL in a browser.
-
 ### 2. Wire the public URL into `.env`
 
 ```env
@@ -130,10 +103,6 @@ task `closed_unfixed` when an issue is closed without a PR; and
 and the dashboard's "PRs merged" / "Closed without fix" metrics stay at
 zero.
 
-GitHub fires a `ping` event immediately after creation. The orchestrator
-returns `{"action": "ignored", "reason": "unsupported_event"}` — that's
-a green check on GitHub's "Recent Deliveries" tab, not an error.
-
 ### 4. PAT permissions
 
 The runtime PAT (`GITHUB_TOKEN`) needs:
@@ -160,12 +129,6 @@ output:
 2. **`BOT_GITHUB_LOGIN`** (optional) — if you're using a regular user
    account as your bot, set this to its login so its comments get filtered
    even though they don't have the `[bot]` suffix.
-
-> Why both layers: the orchestrator's own status comments include literal
-> `@devin` text in a few places (e.g. *"Reply with `@devin <answer>`"*).
-> The `@devin` mention filter alone would *not* prevent loops — those
-> comments would round-trip and re-trigger the orchestrator. The `[bot]`
-> suffix check is what actually closes the loop in App-auth setups.
 
 For demo simplicity, `BOT_GITHUB_LOGIN` is optional. With App auth (4b
 below), you don't need it at all.
@@ -235,47 +198,15 @@ docker compose up -d --force-recreate app
 Trigger an `@devin` comment. The orchestrator's reply will now show as
 `<app-slug>[bot]` with the App's avatar.
 
-#### How it works (one paragraph)
-
-The client signs a short-lived JWT (`RS256`) with the App's private key,
-calls `/repos/{owner}/{repo}/installation` to find the installation ID for
-that repo, then exchanges the JWT for an *installation access token* via
-`POST /app/installations/{id}/access_tokens`. The installation token is what
-authorizes API calls (post comments, read issue), and it's cached
-in-memory until ~60 seconds before expiry. PAT auth is still supported as a
-fallback when `GITHUB_APP_ID` is not set, which keeps the test suite
-credential-free.
-
-### 5. Smoke-test through the tunnel
+### 5. Smoke-test
 
 ```bash
-docker compose up --build -d
-ngrok http 8000     # in a separate terminal
 curl -sS https://<ngrok-host>/healthz
 # {"ok":true}
 ```
 
-Then on any issue in your target repo, comment:
-
-```
-@devin please investigate
-```
-
-Within ~2 seconds:
-- The dashboard at http://localhost:5173 shows a new task.
-- A `Devin remediation session started: …` reply appears on the issue.
-- The interaction timeline records the GitHub trigger and the orchestrator's
-  reply.
-
-### 6. Stopping cleanly
-
-```bash
-# stop ngrok with Ctrl-C in its terminal, then:
-docker compose down
-```
-
-The webhook on GitHub stays put; just disable it (or change the URL when ngrok
-gives you a new hostname next time).
+Then comment `@devin please investigate` on an issue — within ~2s a new
+task appears on the dashboard and the bot replies on the issue.
 
 ---
 
@@ -310,36 +241,11 @@ The current modes:
   `do it`, `proceed`, plus the original retry words (`retry`, `continue`,
   `redo`, `try again`, `reopen`).
 
-### Adding a new mode
-
-`app/modes.py` is the single source of truth. To add e.g. an `audit` mode:
-
-1. Add prompt templates + builders in `app/prompts.py`.
-2. In `app/modes.py`:
-   - Write `_is_audit_request(body) -> bool`.
-   - Define `AUDIT = Mode(key="audit", label="Audit", detect=_is_audit_request,
-     build_prompt=build_audit_prompt, build_followup_prompt=build_audit_followup_prompt,
-     response_ready=..., format_response=...)`.
-   - Insert `AUDIT` *above* `REMEDIATE` in `MODE_REGISTRY` (the registry is
-     priority-ordered; `REMEDIATE` is the catch-all and stays last).
-3. Add tests under `tests/test_plan_route.py` style.
-
-You don't need to touch the orchestrator, the API, the schema, or the UI —
-mode behavior flows through the registry.
-
 ---
 
 ## Dashboard
 
 The dashboard is at **http://localhost:5173** when running in Docker.
-
-### Architecture strip
-
-A one-line picture of the system at the top of the dashboard:
-
-```
-GitHub Issue Comment → Orchestrator → Devin Session → Pull Request → Dashboard
-```
 
 ### Metric cards
 
@@ -354,23 +260,6 @@ GitHub Issue Comment → Orchestrator → Devin Session → Pull Request → Das
 - **Follow-ups forwarded** — count of `followup_forwarded` interaction events.
 - **Avg time to PR / completion** — averages across tasks where Devin has
   reached that state.
-
-If a metric isn't present in the API response, the card shows `—` rather than
-breaking the UI.
-
-### Lifecycle indicator
-
-Each task displays its lifecycle as a compact strip:
-
-```
-Issue ✓ → Devin ● → PR ○ → Review ○ → Done ○
-```
-
-- `✓` done, `●` active (pulsing), `○` pending, `✕` failed.
-- A task with `pr_opened` status is shown as **Awaiting review**, not Completed
-  — a PR opened by Devin is *not* the end of the workflow. A human still has
-  to review and merge.
-- An `awaiting_user` task additionally renders an "Awaiting user" flag.
 
 ### Task table
 
@@ -447,17 +336,3 @@ predictable spend". Beyond that you want Postgres + multiple uvicorn workers
 - **No scanner / scheduled discovery.** Purely event-driven from `@devin`
   mentions.
 - **Single repo, single org.** No multi-tenant scoping.
-
-## Future improvements
-
-- Scheduled codebase audit ("scan repo X every Monday").
-- Scanner ingestion from Dependabot, Semgrep, Snyk.
-- Slack / Jira / Linear notifications for state changes.
-- Severity-based approval gates.
-- Policy checks before PR (license, scope, sensitive paths).
-- Dashboard charts: time-series of mentions vs. PRs vs. completions.
-- Postgres + multi-worker uvicorn.
-- Auth (OIDC) on the dashboard and simulate endpoint.
-- Per-installation GitHub API rate-budget tracking.
-- Exponential backoff with retry on transient Devin/GitHub 5xx and 429.
-- Devin webhooks instead of polling, when those land.
